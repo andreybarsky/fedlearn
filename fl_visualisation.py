@@ -117,7 +117,7 @@ def inspect_model_outputs(model: nn.Module,
 
     batch_classnames = [dataset.classes[y] for y in batch_labels]
     true_classnames = [dataset.classes[y] for y in batch_y]
-    disp_images(images, pred_labels=batch_classnames, true_labels=true_classnames, h_pad=-3)
+    disp_images(images, pred_labels=batch_classnames, true_labels=true_classnames, h_pad=3)
 
 
 
@@ -207,6 +207,7 @@ def plot_series(*series: list[float],
               epochs: int = None, # optional number of epochs to demarcate plot):
               epoch_learning_rates: dict = None, # optional mapping of epoch numbers to LR values
               names=None, styles=None,
+              linestyles=None, colors=None, markers=None,
               xlabel=None, ylabel=None, title=None, 
               ax=None, show=True,
               live=False, cur_step=None, max_step=None,
@@ -231,7 +232,14 @@ def plot_series(*series: list[float],
 
     for s, values in enumerate(series):
         name = names[s] if names is not None else None
-        style = styles[s] if styles is not None else None
+        if styles is not None:
+            # extract shorthand style string for plotting
+            style = styles[s]
+        else:
+            # extract specific style elements
+            linestyle = linestyles[s] if linestyles is not None else None
+            color = colors[s] if colors is not None else None
+            marker = markers[s] if markers is not None else None
 
         # plot raw values as dotted line:
         if (rolling_window is not None) and (rolling_window > 1):
@@ -245,7 +253,11 @@ def plot_series(*series: list[float],
             if live:
                 ax.set_data(smooth_steps, smooth_values)
             else:
-                ax.plot(smooth_steps, smooth_values, style, label=name, zorder=-s)
+                if styles is not None:
+                    ax.plot(smooth_steps, smooth_values, style, label=name, zorder=-s)
+                else:
+                    ax.plot(smooth_steps, smooth_values, linestyle=linestyle, color=color, 
+                            marker=marker, label=name, zorder=-s)
         else:
             # just plot raw values
             plt.plot(steps, values, style, label=name, zorder=-s)
@@ -276,8 +288,8 @@ def plot_series(*series: list[float],
                 ax.set_xlabel('Training step')
         else:
             ax.set_xlabel(xlabel)
-        
-        ax.legend()
+        if names is not None:
+            ax.legend()
         ax.set_ylabel(ylabel)
         ax.set_title(title)
     if show:
@@ -315,17 +327,21 @@ def plot_metrics(train_loss, val_loss, train_acc, val_acc, rolling_window=500,
     plot_series(train_loss, val_loss, 
                 rolling_window=rolling_window,
                 names=['Training', 'Validation'],
-                styles=[':r', ':b'],
+                colors=['tab:orange', 'tab:blue'],
+                linestyles=[':', ':'],
                 title='Loss', ylabel=f'Loss (rolling average, k={rolling_window})',
                 ax=loss_ax, show=False,
+                epochs=num_epochs,
                 epoch_learning_rates=epoch_learning_rates,
                 **kwargs)
     plot_series(train_acc, val_acc, 
                 rolling_window=rolling_window,
                 names=['Training', 'Validation'],
-                styles=['-r', '-b'],
+                colors=['tab:orange', 'tab:blue'],
+                linestyles=['-', '-'],
                 title='Accuracy', ylabel=f'Accuracy (rolling average, k={rolling_window})',
                 ax=acc_ax, show=False, 
+                epochs=num_epochs,
                 epoch_learning_rates=epoch_learning_rates,
                 **kwargs)
     plt.tight_layout()

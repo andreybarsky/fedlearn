@@ -8,39 +8,6 @@ from IPython.display import clear_output, display_pretty
 from fl_visualisation import plot_metrics
 
 
-def progress_bar(current_step, 
-                 total_steps,
-                 epochs=None, # optional number of epochs to demarcate plot):
-                 bar_len=80):
-    """makes a pretty little progress bar based on current progress
-    out of some total amount of progress, formatted as a string
-    of length=bar_length. (plus padding characters at each side)"""
-
-    # define characters to use for bar:
-    progress_char,  progress_sep_char  = '═', '╪'
-    remaining_char, remaining_sep_char = '─', '┼'
-    pad_chars = '[]'
-    
-    total_progress = bar_len # subtract pad chars
-    complete_frac = (current_step) / total_steps # +1 because 1 is the first step
-    current_progress = int(np.floor(complete_frac * total_progress))
-    remaining_progress = total_progress - current_progress # number of characters of progress
-    lb, rb = pad_chars
-    bar_chars = [progress_char]*current_progress + [remaining_char]*remaining_progress
-    if epochs is not None and epochs != 1:
-        # epoch_steps = np.linspace(0, total_steps, epochs+1)
-        # epoch_fracs = [(s+1 / total_steps) for s in epoch_steps]
-        progress_per_epoch = total_progress / epochs
-        epoch_marks = [int(np.round(e))-1 for e in np.arange(epochs) * progress_per_epoch]
-        for i in epoch_marks[1:]:
-            if bar_chars[i] == progress_char:
-                bar_chars[i] = progress_sep_char
-            else:
-                bar_chars[i] = remaining_sep_char
-    bar = lb + ''.join(bar_chars) + rb
-    return bar
-
-
 class ProgressReporter:
     """a simple class for tracking loss/accuracy metrics of a model
     as it trains, and reporting them as a real-time display."""
@@ -115,20 +82,20 @@ class ProgressReporter:
                 self.report()
                 print('(final reporter update)')
         else:
-            # if an aggregator is defined, tell it that we've updated:
-            self.aggregator.notify(self)
+            # if an aggregator is defined, tell it that we've updated.
+            
+            # if learning rates are being supplied, display the learning rate as well:
+            if len(self.metrics['lrs']) > 0:
+                current_lr = self.metrics['lrs'][-1]
+                lr_str = f'current learning rate: {current_lr:.0e}'
+                temp_messages = [lr_str]
+            else:
+                temp_messages = []
+                
+            self.aggregator.notify(self, temp_messages)
             # this suppresses the individual reporter's report behaviour,
             # but may trigger the aggregator to report depending on the
-            # total time elapsed between aggregator updates
-    
-    @property
-    def step(self):
-        return len(self.metrics['train_losses'])
-    @property
-    def total_steps(self):
-        return self.steps_per_epoch * self.num_epochs
-    
-    
+            # total time elapsed between aggregator updates    
     
     def report(self, aggregated=None, width=82):
         """when called, displays current training progress numbers
@@ -172,14 +139,10 @@ class ProgressReporter:
             elapsed = self.epoch_end_time - self.epoch_start_time
         else:
             # regular case: updating during active training
-            
             if epoch != self.current_epoch:
                 # record start of new epoch
                 self.epoch_start_time = time.time()
                 self.current_epoch = epoch
-            # elif batch == self.steps_per_epoch:
-            #     # record end of current epoch
-            #     self.epoch_end_time = time.time()
 
             interval = self.step - self.last_report_steps
             elapsed = update_time - self.last_report_time
@@ -188,13 +151,12 @@ class ProgressReporter:
             if self.step > 0:
                 # report method called after the model has stopped training,
                 # so overrule the averaging window and average across whole epoch instead
-                print('reporter catched special end case')
                 interval = self.steps_per_epoch
                 elapsed = self.epoch_end_time - self.epoch_start_time
             else:
                 return # function called before first step; nothing to print
             
-        # compute averages:
+        # compute averages and format nice strings:
         avg_tloss = f'{(sum(train_losses[-interval:]) / interval):.4f}'
         avg_tacc =  f'{(sum(train_accs[-interval:])   / interval):.2%}'
         avg_vloss = f'{(sum(val_losses[-interval:])   / interval):.4f}'
@@ -211,21 +173,23 @@ class ProgressReporter:
         else:
             loss_str = f'{train_str:^{width//2}} {val_str:^{width//2}}'
 
-        elapsed_str = f'{(elapsed / interval):.4f}'
-        time_str = f'    time per batch: {elapsed_str}s' if not aggregated else ''
-            
+
         # if learning rates are being supplied, display the learning rate as well:
-        if len(lrs) > 0:
+        if (not aggregated) and (len(lrs) > 0):
             current_lr = lrs[-1]
-            lr_str = f'    current learning rate: {current_lr:.0e}  \n'
+            lr_str = f'\n    current learning rate: {current_lr:.0e}'
         else:
+            # (but when aggregating, the LR is the same for all models, so no need to display it here)
             lr_str = ''
 
+        elapsed_str = f'{(elapsed / interval):.4f}'
+        time_str = f'    time per batch: {elapsed_str}s' if not aggregated else ''
+        
         output = (f'{f"Epoch {epoch+1}/{self.num_epochs}":^15}'
                   f'-{f"batch {batch}/{self.steps_per_epoch}":^20}'
                   f'-{f"{((self.step) / self.total_steps):.1%}":^10}  \n'
                   f'{progress_bar(self.step, self.total_steps, epochs=self.num_epochs, bar_len=width-2)}  \n' +\
-                  loss_str + '\n' + time_str + lr_str)
+                  loss_str + lr_str + time_str)
 
         # log when this report was given, for tracking output timings:
         self.last_report_time = time.time()
@@ -248,6 +212,47 @@ class ProgressReporter:
                      rolling_window=rolling_window, 
                      epochs=epochs, lrs=lrs)
 
+
+    @property
+    def step(self):
+        return len(self.metrics['train_losses'])
+    @property
+    def total_steps(self):
+        return self.steps_per_epoch * self.num_epochs
+    
+
+def progress_bar(current_step, 
+                 total_steps,
+                 epochs=None, # optional number of epochs to demarcate plot):
+                 bar_len=80):
+    """makes a pretty little progress bar based on current progress
+    out of some total amount of progress, formatted as a string
+    of length=bar_length. (plus padding characters at each side)"""
+
+    # define characters to use for bar:
+    progress_char,  progress_sep_char  = '═', '╪'
+    remaining_char, remaining_sep_char = '─', '┼'
+    pad_chars = '[]'
+    
+    total_progress = bar_len # subtract pad chars
+    complete_frac = (current_step) / total_steps # +1 because 1 is the first step
+    current_progress = int(np.floor(complete_frac * total_progress))
+    remaining_progress = total_progress - current_progress # number of characters of progress
+    lb, rb = pad_chars
+    bar_chars = [progress_char]*current_progress + [remaining_char]*remaining_progress
+    if epochs is not None and epochs != 1:
+        # epoch_steps = np.linspace(0, total_steps, epochs+1)
+        # epoch_fracs = [(s+1 / total_steps) for s in epoch_steps]
+        progress_per_epoch = total_progress / epochs
+        epoch_marks = [int(np.round(e))-1 for e in np.arange(epochs) * progress_per_epoch]
+        for i in epoch_marks[1:]:
+            if bar_chars[i] == progress_char:
+                bar_chars[i] = progress_sep_char
+            else:
+                bar_chars[i] = remaining_sep_char
+    bar = lb + ''.join(bar_chars) + rb
+    return bar
+        
 
 class JointProgressReporter:
     """an aggregator class that holds multiple ProgressReport objects
@@ -276,6 +281,9 @@ class JointProgressReporter:
 
         self.messages = [] # permanent messages to be appended to each progress report
 
+        self.global_val_losses = []
+        self.global_val_accs = []
+
     def notify(self, reporter, temp_messages=[]):
         """listener hook that gets called whenever a subscribed reporter updates.
         if enough time has elapsed since the last aggregated report, will generate
@@ -291,13 +299,33 @@ class JointProgressReporter:
             self.report(temp_messages=temp_messages)
             self.reporting = False
     
-    def report(self, temp_messages=[]):
+    def report(self, temp_messages: list[str]=[]):
+        """displays a report based on collecting together
+            the individual reports of each subscribed reporter object.
+        optionally, can receive additional temporary messages
+            to display at this step."""
+        
         clear_output(wait=True)
         self.last_report_time = time.time()
-        reports = [f'Client #{r}: {reporter.report(aggregated=True)}\n' for r, reporter in enumerate(self.reporters)]
+
+        # collect individual reports:
+        reports = [f'\nClient #{r}: {reporter.report(aggregated=True)}' 
+                   for r, reporter in enumerate(self.reporters)]
+        
         # add any temporary messages that should be displayed at this step:
-        reports.extend(temp_messages)
-        # add any permanent messages that need to be displayed:
-        reports.extend(self.messages)
+        report_width = len(reports[0].split('\n')[0])
+        padded_temp_messages = [f'{msg:^{report_width}}' for msg in temp_messages]
+        reports.extend(padded_temp_messages)
+        # add any permanent messages that need to be displayed at all times:
+        reports.extend([''] + self.messages)
         output_str = '\n'.join([out for out in reports])
         display_pretty(output_str, raw=True)
+
+    def global_update(self, val_loss, val_acc):
+        """receive evaluation metrics from central server and record for final loss curve"""
+        self.global_val_losses.append(val_loss)
+        self.global_val_accs.append(val_acc)
+    
+    def plot_curves(self, rolling_window=100):
+        """plot loss curves for all registered reporters, overlaid with global validation loss"""
+        

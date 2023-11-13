@@ -1,30 +1,7 @@
 import numpy as np
-from dataclasses import dataclass
 import torch
 from torch import utils, Tensor
 from torch.utils.data import Dataset, TensorDataset, Subset
-from torchvision import transforms
-
-# class PartitionData(utils.data.Dataset):
-#     """custom Dataset subclass meant to represent private partition data,
-#     stored in memory instead of on disk for simplicity"""
-#     def __init__(self, data, targets):
-#         self.data = data
-#         self.targets = torch.LongTensor(targets)
-#         self.transform = transform
-        
-#     def __getitem__(self, index):
-#         x = self.data[index]
-#         y = self.targets[index]
-        
-#         if self.transform:
-#             x = Image.fromarray(self.data[index].astype(np.uint8).transpose(1,2,0))
-#             x = self.transform(x)
-        
-#         return x, y
-    
-#     def __len__(self):
-#         return len(self.data)
 
 def load_data(dataset_class: type, # a callable torch dataset class
               val_ratio: float=0.1):
