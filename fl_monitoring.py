@@ -1,11 +1,12 @@
 import numpy as np
 import time
 import asyncio
-from matplotlib import rcParams
+from matplotlib import colormaps, rcParams
+import matplotlib.pyplot as plt
 
 from IPython.display import clear_output, display_pretty
 
-from fl_visualisation import plot_metrics
+from fl_visualisation import plot_metrics, plot_series
 
 
 class ProgressReporter:
@@ -169,7 +170,7 @@ class ProgressReporter:
             # report fedprox loss if we're training with it
             avg_prox_loss = f'{(sum(prox_losses[-interval:]) / interval):.4f}'
             prox_str = f'prox loss: {avg_prox_loss}'
-            loss_str = f'{prox_str:^{width//3}} {train_str:^{width//3}} {val_str:^{width//3}}'
+            loss_str = f'{prox_str:^{width//5}} {train_str:^{(2*width)//5}} {val_str:^{(2*width)//3}}'
         else:
             loss_str = f'{train_str:^{width//2}} {val_str:^{width//2}}'
 
@@ -219,40 +220,7 @@ class ProgressReporter:
     @property
     def total_steps(self):
         return self.steps_per_epoch * self.num_epochs
-    
-
-def progress_bar(current_step, 
-                 total_steps,
-                 epochs=None, # optional number of epochs to demarcate plot):
-                 bar_len=80):
-    """makes a pretty little progress bar based on current progress
-    out of some total amount of progress, formatted as a string
-    of length=bar_length. (plus padding characters at each side)"""
-
-    # define characters to use for bar:
-    progress_char,  progress_sep_char  = '═', '╪'
-    remaining_char, remaining_sep_char = '─', '┼'
-    pad_chars = '[]'
-    
-    total_progress = bar_len # subtract pad chars
-    complete_frac = (current_step) / total_steps # +1 because 1 is the first step
-    current_progress = int(np.floor(complete_frac * total_progress))
-    remaining_progress = total_progress - current_progress # number of characters of progress
-    lb, rb = pad_chars
-    bar_chars = [progress_char]*current_progress + [remaining_char]*remaining_progress
-    if epochs is not None and epochs != 1:
-        # epoch_steps = np.linspace(0, total_steps, epochs+1)
-        # epoch_fracs = [(s+1 / total_steps) for s in epoch_steps]
-        progress_per_epoch = total_progress / epochs
-        epoch_marks = [int(np.round(e))-1 for e in np.arange(epochs) * progress_per_epoch]
-        for i in epoch_marks[1:]:
-            if bar_chars[i] == progress_char:
-                bar_chars[i] = progress_sep_char
-            else:
-                bar_chars[i] = remaining_sep_char
-    bar = lb + ''.join(bar_chars) + rb
-    return bar
-        
+     
 
 class JointProgressReporter:
     """an aggregator class that holds multiple ProgressReport objects
@@ -326,6 +294,221 @@ class JointProgressReporter:
         self.global_val_losses.append(val_loss)
         self.global_val_accs.append(val_acc)
     
-    def plot_curves(self, rolling_window=100):
-        """plot loss curves for all registered reporters, overlaid with global validation loss"""
+    def plot_curves(self, rolling_window=50, fig=None, show_lrs=True):
+        """plot the loss and accuracy curves for all of the reporters subscribed to
+        this aggregator, breaking them up by epoch and superimposing the global
+        validation metrics on top."""
         
+        #### this is a huge and very messy function, with a lot of untidy hacks and kludges,
+        #### because I haven't had time to clean it up and document properly. 
+        #### sorry about that, not proud of it.
+        
+        num_clients = len(self.reporters)
+        
+        # # collect individual train/val metrics from each client reporter:
+        # client_train_losses = [reporter.metrics['train_losses'] for reporter in self.reporters]
+        # client_val_losses   = [reporter.metrics['val_losses']   for reporter in self.reporters]
+        # client_train_accs   = [reporter.metrics['train_accs']   for reporter in self.reporters]
+        # client_val_accs     = [reporter.metrics['val_accs']     for reporter in self.reporters]
+        # if len(self.reporters[0].metrics['prox_losses']) > 0:
+        #     client_prox_losses = [reporter.metrics['prox_losses']     for reporter in self.reporters]
+        # else:
+        #     client_prox_losses = None
+    
+        global_epoch_vlosses = self.global_val_losses
+        global_epoch_vaccs = self.global_val_accs
+    
+        # assume epoch and learning rate information is the same for all client reporters,
+        # but most complete for the client with the largest dataset size, so we use that one
+        # as our reference reporter:
+        
+        max_rep_len = max([rep.step for rep in self.reporters])
+        ref_rep = [rep for rep in self.reporters if rep.step == max_rep_len][0]
+        lrs, epochs = ref_rep.metrics['lrs'], ref_rep.indices['epoch']
+        
+        num_epochs = max(epochs)
+        epoch_learning_rates = []
+        ref_epoch_start_idxs = []
+        for e in range(num_epochs):
+            # establish the global step at which each epoch starts:
+            ref_epoch_start = np.where(np.asarray(epochs)==e)[0][0]
+            ref_epoch_start_idxs.append(ref_epoch_start)
+            # establish the learning rate used at this epoch:
+            epoch_lr = lrs[ref_epoch_start+1]
+            epoch_learning_rates.append(epoch_lr)
+    
+        # x coordinates of global metric datapoints:
+        global_xs = (np.arange(num_epochs)+1) * ref_rep.steps_per_epoch
+    
+        # get current figure size params:
+        fig_width, fig_height = rcParams['figure.figsize']
+        
+        # get the figure, retrieving one if one already exists:
+        if fig is None:
+            # set height to full width for drawing 2x2 plots:
+            rcParams['figure.figsize'] = fig_width, fig_width
+            fig, axes = plt.subplots(2, 2)
+        else:
+            axes = fig.axes
+    
+        # train on left, validation on right
+        # and loss on top, accuracy on bottom:
+        (tloss_ax, vloss_ax), (tacc_ax, vacc_ax) = axes
+    
+        client_shades = np.linspace(0.2, 0.5, num_clients)
+        train_cmap = colormaps['Oranges']
+        train_colors = [train_cmap(shade) for shade in client_shades]
+    
+        val_cmap = colormaps['Blues']
+        val_colors = [val_cmap(shade) for shade in client_shades]
+        
+        # pad each client's loss list to that of the longest:
+        # longest_list = max([len(losses) for losses in client_val_losses])
+        # padded_losses = []
+        # client_artists = []
+        for r, rep in enumerate(self.reporters):       
+    
+            # we must plot each epoch separately, since different clients have
+            # different length epochs, with gaps in between
+    
+            for e in range(num_epochs):
+                # label the *middle* colour of the client lines.
+                # this means we label only one of the ~25 lines drawn inside this loop:
+                use_label = (r == int(num_clients // 2)) and (e == 0)
+    
+                # get metrics for the epoch we are drawing:
+                epoch_start_idx = np.where(np.asarray(rep.indices['epoch']) == e)[0][0]
+                epoch_end_idx = (np.where(np.asarray(rep.indices['epoch']) == e)[0][-1]) +1
+                epoch_tloss = rep.metrics['train_losses'][epoch_start_idx : epoch_end_idx]
+                epoch_vloss = rep.metrics['val_losses'][epoch_start_idx : epoch_end_idx]
+                epoch_tacc = rep.metrics['train_accs'][epoch_start_idx : epoch_end_idx]
+                epoch_vacc = rep.metrics['val_accs'][epoch_start_idx : epoch_end_idx]
+    
+                client_epoch_len = epoch_end_idx - epoch_start_idx
+                # and get the x locations of those metrics, which are actually determined
+                # by the epoch start indexes of the reporter with the largest dataset:
+                x_steps = np.arange(ref_epoch_start_idxs[e], ref_epoch_start_idxs[e] + client_epoch_len)
+                
+                # train loss:
+                label = ['Client train loss'] if use_label else None
+                plot_series(epoch_tloss,
+                    colors=[train_colors[r]],
+                    linestyles=[':'],
+                    names=label,
+                    ylabel=f'Loss (rolling average, k={rolling_window})',
+                    steps=x_steps,
+                    ax=tloss_ax, rolling_window=rolling_window, show=False)
+                
+                # prox loss: (on same axis as train loss)
+                if len(rep.metrics['prox_losses']) > 0:
+                    epoch_prox_loss = rep.metrics['prox_losses'][epoch_start_idx : epoch_end_idx]
+                    label = ['Client prox loss'] if use_label else None
+                    plot_series(epoch_prox_loss,
+                        colors=[colormaps['Oranges'](r/num_clients)],
+                        linestyles=['--'],
+                        names=label,
+                        steps=x_steps,
+                        ax=tloss_ax, rolling_window=rolling_window, show=False)
+                
+                # val loss:
+                label = ['Client val loss'] if use_label else None
+                plot_series(epoch_vloss,
+                    colors=[val_colors[r]],
+                    linestyles=[':'],
+                    names=label,
+                    ylabel=f'Loss (rolling average, k={rolling_window})',                        
+                    steps=x_steps,                        
+                    ax=vloss_ax, rolling_window=rolling_window, show=False)
+        
+                # train acc:
+                label = ['Client train accuracy'] if use_label else None
+                plot_series(epoch_tacc,
+                    colors=[train_colors[r]],
+                    linestyles=['-'],
+                    ylabel=f'Accuracy (rolling average, k={rolling_window})',
+                    names=label,
+                    steps=x_steps,                        
+                    ax=tacc_ax, rolling_window=rolling_window, show=False)
+                
+                # val acc:
+                label = ['Client val accuracy'] if use_label else None
+                plot_series(epoch_vacc,
+                    colors=[val_colors[r]],
+                    linestyles=['-'],
+                    ylabel=f'Accuracy (rolling average, k={rolling_window})',
+                    names=label,
+                    steps=x_steps,
+                    ax=vacc_ax, rolling_window=rolling_window, show=False)
+    
+        # also on validation axes: plot the global validation too
+        
+        vloss_ax.plot(global_xs, global_epoch_vlosses, '--bo', label='Global val loss')
+        vacc_ax.plot(global_xs, global_epoch_vaccs, '-bo', label='Global val accuracy')
+        # add dotted lines across entire plot to show epoch / update boundaries:
+        for ax_row in axes:
+            for ax in ax_row:
+                for x in global_xs:
+                    ax.axvline(x, c=val_cmap(0.2), linestyle='--', zorder=-99)
+                # as well as legends:
+                ax.legend()
+                # and epoch marks:
+                epoch_marks = np.arange(num_epochs) * ref_rep.steps_per_epoch
+                ax.set_xticks(epoch_marks, minor=False)
+                ax.set_xticklabels(np.arange(num_epochs)+1, minor=False)
+                ax.set_xlabel('Epoch')
+    
+                if show_lrs:
+                    epoch_centre_marks = epoch_marks + (ref_rep.steps_per_epoch / 2)
+                    ax.set_xticks(epoch_centre_marks, minor=True)
+                    lr_strings = [f'{epoch_learning_rates[e]:.0e}' for e in range(num_epochs)]
+                    ax.set_xticklabels(lr_strings, minor=True)
+                    ax.tick_params(axis='x', which='minor', length=0, labelsize=7)
+        
+        # plot titles:
+        tloss_ax.set_title('Training loss')
+        vloss_ax.set_title('Validation loss')
+        tacc_ax.set_title('Training accuracy')
+        vacc_ax.set_title('Validation accuracy')
+        
+        # display:
+        fig.suptitle('Federated learning metrics')
+        plt.tight_layout(h_pad=3, w_pad=3)
+        plt.show()
+    
+        # restore existing figure size params:
+        rcParams['figure.figsize'] = fig_width, fig_height
+
+
+
+def progress_bar(current_step, 
+                 total_steps,
+                 epochs=None, # optional number of epochs to demarcate plot):
+                 bar_len=80):
+    """makes a pretty little progress bar based on current progress
+    out of some total amount of progress, formatted as a string
+    of length=bar_length. (plus padding characters at each side)"""
+
+    # define characters to use for bar:
+    progress_char,  progress_sep_char  = '═', '╪'
+    remaining_char, remaining_sep_char = '─', '┼'
+    pad_chars = '[]'
+    
+    total_progress = bar_len # subtract pad chars
+    complete_frac = (current_step) / total_steps # +1 because 1 is the first step
+    current_progress = int(np.floor(complete_frac * total_progress))
+    remaining_progress = total_progress - current_progress # number of characters of progress
+    lb, rb = pad_chars
+    bar_chars = [progress_char]*current_progress + [remaining_char]*remaining_progress
+    if epochs is not None and epochs != 1:
+        # epoch_steps = np.linspace(0, total_steps, epochs+1)
+        # epoch_fracs = [(s+1 / total_steps) for s in epoch_steps]
+        progress_per_epoch = total_progress / epochs
+        epoch_marks = [int(np.round(e))-1 for e in np.arange(epochs) * progress_per_epoch]
+        for i in epoch_marks[1:]:
+            if bar_chars[i] == progress_char:
+                bar_chars[i] = progress_sep_char
+            else:
+                bar_chars[i] = remaining_sep_char
+    bar = lb + ''.join(bar_chars) + rb
+    return bar
+       

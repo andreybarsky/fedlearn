@@ -13,6 +13,9 @@ import asyncio
 
 from IPython.display import display, display_pretty, clear_output
 
+# set global figure size parameter at import:
+rcParams['figure.figsize'] = [8, 6]
+
 
 #### functions to display images from datasets:
 
@@ -206,6 +209,7 @@ def plot_series(*series: list[float],
               rolling_window: int = 500, # size of rolling window for curve smoothing
               epochs: int = None, # optional number of epochs to demarcate plot):
               epoch_learning_rates: dict = None, # optional mapping of epoch numbers to LR values
+              steps=None,
               names=None, styles=None,
               linestyles=None, colors=None, markers=None,
               xlabel=None, ylabel=None, title=None, 
@@ -226,9 +230,13 @@ def plot_series(*series: list[float],
         # assume we've been fed a single array of values by mistake,
         # which we quietly wrap into a list before continuing:
         series = [series]
-    num_steps = len(series[0])
-    assert len(series[0]) == len(series[-1]), "all input series for plotting must be of equal length"
-    steps = np.arange(num_steps)
+
+    if steps is None:
+        num_steps = len(series[0])
+        assert len(series[0]) == len(series[-1]), "all input series for plotting must be of equal length"
+        steps = np.arange(num_steps)
+    else:
+        num_steps = len(steps)
 
     for s, values in enumerate(series):
         name = names[s] if names is not None else None
@@ -248,8 +256,10 @@ def plot_series(*series: list[float],
             smooth_values = np.convolve(values, np.ones(rolling_window), 'valid') / rolling_window
             # but pad from the start so it centres on the correct point:
             smooth_start_idx = rolling_window // 2
-            smooth_values = [None]*smooth_start_idx + list(smooth_values)
-            smooth_steps = np.arange(len(smooth_values))
+            smooth_end_idx = (len(values) - smooth_start_idx)+1
+            # smooth_values = [None]*smooth_start_idx + list(smooth_values)
+            
+            smooth_steps = steps[smooth_start_idx: smooth_end_idx]
             if live:
                 ax.set_data(smooth_steps, smooth_values)
             else:
@@ -260,7 +270,11 @@ def plot_series(*series: list[float],
                             marker=marker, label=name, zorder=-s)
         else:
             # just plot raw values
-            plt.plot(steps, values, style, label=name, zorder=-s)
+            if styles is not None:
+                ax.plot(steps, values, style, label=name, zorder=-s)
+            else:
+                ax.plot(steps, values, linestyle=linestyle, color=color, 
+                            marker=marker, label=name, zorder=-s)
 
     # these only need to be called for initial drawing:
     if (not live) or (cur_step > 0):
@@ -319,7 +333,7 @@ def plot_metrics(train_loss, val_loss, train_acc, val_acc, rolling_window=500,
         epoch_learning_rates = []
         num_epochs = max(epochs)
         for e in range(num_epochs):
-            epoch_lr = lrs[np.where(np.asarray(epochs)==e)[0][0]]
+            epoch_lr = lrs[np.where(np.asarray(epochs)==e)[0][0] +1]
             epoch_learning_rates.append(epoch_lr)
 
     # two plots: loss on the left, accuracy on the right

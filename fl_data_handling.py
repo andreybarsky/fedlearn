@@ -1,7 +1,10 @@
 import numpy as np
 import torch
 from torch import utils, Tensor
-from torch.utils.data import Dataset, TensorDataset, Subset
+from torch.utils.data import Dataset, TensorDataset, Subset, DataLoader
+
+from IPython.display import clear_output, display_pretty
+
 
 def load_data(dataset_class: type, # a callable torch dataset class
               val_ratio: float=0.1):
@@ -49,8 +52,8 @@ def load_data(dataset_class: type, # a callable torch dataset class
 
     # package them up as TensorDatasets:
     data_train = TensorDataset(Tensor(x_train), Tensor(y_train).long())
-    data_val = TensorDataset(Tensor(x_train), Tensor(y_train).long())
-    data_test = TensorDataset(Tensor(x_train), Tensor(y_train).long())
+    data_val = TensorDataset(Tensor(x_val), Tensor(y_val).long())
+    data_test = TensorDataset(Tensor(x_test), Tensor(y_test).long())
 
     for obj in data_train, data_val, data_test:
         # assign neat attributes for x and y tensors:
@@ -240,6 +243,9 @@ def num_correct(pred: Tensor,
     return correct
 
 def get_val_metrics(net, val_loader, val_iter, loss_func):
+    """runs a model on a batch from a validation loader & iterator,
+    and returns the resulting loss and accuracy metrics,
+    as well as a new iterator if one is needed."""
     with torch.no_grad():
         try:
             val_x, val_y = next(val_iter)
@@ -252,6 +258,30 @@ def get_val_metrics(net, val_loader, val_iter, loss_func):
     val_loss = loss_func(val_out, val_y).item()
     val_acc = num_correct(val_out, val_y) / len(val_out)
     return val_loss, val_acc, val_iter
+
+def full_evaluation(net, dataset, loss_func, set_name='Test', show_progress=True):
+    """runs a model on a full dataset,
+    and returns the resulting loss and accuracy metrics."""
+    
+    losses, accs = [], []
+    loader = DataLoader(dataset, batch_size=32)
+    for b, batch in enumerate(loader):
+        if (show_progress) and ((b+1) % 25 == 0):
+            display_pretty(f'+ Evaluating on {set_name.lower()} set... {b+1}/{len(loader)}',  raw=True)
+            clear_output(wait=True)
+        batch_x, batch_y = batch
+        batch_out = net(batch_x)
+        losses.append(loss_func(batch_out, batch_y).item())
+        accs.append(num_correct(batch_out, batch_y) / len(batch_out))
+    eval_loss = np.mean(losses)
+    eval_acc = np.mean(accs)
+
+    return eval_loss, eval_acc
+    
+    # str_output = (f'+ {set_name} loss: {test_loss:.4f}'
+    #      f'  |  accuracy: {test_acc:.2%}')
+    # print(str_output)    
+    # return test_loss, test_acc
 
 def get_class_distribution(dataset):
     """accepts a torch Dataset object and returns a dict
