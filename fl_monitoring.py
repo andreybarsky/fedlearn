@@ -170,9 +170,9 @@ class ProgressReporter:
             # report fedprox loss if we're training with it
             avg_prox_loss = f'{(sum(prox_losses[-interval:]) / interval):.6f}'
             prox_str = f'prox loss: {avg_prox_loss}'
-            loss_str = f'{prox_str:^{width//3}}{train_str:^{(width)//3}}{val_str:^{(width)//3}}'
+            loss_str = f'{prox_str:<{(width-4)//3}}  {train_str:^{(width-4)//3}}  {val_str:>{(width-4)//3}}'
         else:
-            loss_str = f'{train_str:^{width//2}}{val_str:^{width//2}}'
+            loss_str = f'{train_str:<{(width-2)//2}}  {val_str:>{(width-2)//2}}'
 
 
         # if learning rates are being supplied, display the learning rate as well:
