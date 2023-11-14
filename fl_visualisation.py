@@ -212,8 +212,8 @@ def plot_series(*series: list[float],
               steps=None,
               names=None, styles=None,
               linestyles=None, colors=None, markers=None,
-              xlabel=None, ylabel=None, title=None, 
-              ax=None, show=True,
+              xlabel=None, ylabel=None, title=None, zmod=0,
+              ax=None, show=True, use_legend=True,
               live=False, cur_step=None, max_step=None,
               ):
     """accepts an iterable of lists of floats interpreted as some training metric per update step,
@@ -222,6 +222,9 @@ def plot_series(*series: list[float],
     - 'names' and 'styles': iterables of strings denoting name and style for each series.
     - 'rolling_window', smooths the resulting curve with a box filter of that size.
     - 'epochs', if provided, adds tick marks to the plot denoting epoch boundaries."""
+
+    ### this function contains some deprecated code from when I tried to make it
+    ### update an animated plot in real-time during training, but it didn't work well
 
     if ax is None:
         ax = plt.gca()
@@ -243,11 +246,15 @@ def plot_series(*series: list[float],
         if styles is not None:
             # extract shorthand style string for plotting
             style = styles[s]
+            args = (style,)
+            kwargs = {}
         else:
             # extract specific style elements
             linestyle = linestyles[s] if linestyles is not None else None
             color = colors[s] if colors is not None else None
             marker = markers[s] if markers is not None else None
+            args = tuple()
+            kwargs = {'linestyle': linestyle, 'color': color, 'marker': marker}
 
         # plot raw values as dotted line:
         if (rolling_window is not None) and (rolling_window > 1):
@@ -263,18 +270,20 @@ def plot_series(*series: list[float],
             if live:
                 ax.set_data(smooth_steps, smooth_values)
             else:
-                if styles is not None:
-                    ax.plot(smooth_steps, smooth_values, style, label=name, zorder=-s)
-                else:
-                    ax.plot(smooth_steps, smooth_values, linestyle=linestyle, color=color, 
-                            marker=marker, label=name, zorder=-s)
+                artist = ax.plot(smooth_steps, smooth_values, *args, label=name, zorder=(-s)+zmod, **kwargs)
+                # if styles is not None:
+                #     artist = ax.plot(smooth_steps, smooth_values, style, label=name, zorder=-s)
+                # else:
+                #     artist = ax.plot(smooth_steps, smooth_values, linestyle=linestyle, color=color, 
+                #             marker=marker, label=name, zorder=-s)
         else:
             # just plot raw values
-            if styles is not None:
-                ax.plot(steps, values, style, label=name, zorder=-s)
-            else:
-                ax.plot(steps, values, linestyle=linestyle, color=color, 
-                            marker=marker, label=name, zorder=-s)
+            artist = ax.plot(steps, values, *args, label=name, zorder=(-s)+zmod, **kwargs)
+            # if styles is not None:
+            #     artist = ax.plot(steps, values, style, label=name, zorder=-s)
+            # else:
+            #     artist = ax.plot(steps, values, linestyle=linestyle, color=color, 
+            #                 marker=marker, label=name, zorder=-s)
 
     # these only need to be called for initial drawing:
     if (not live) or (cur_step > 0):
@@ -302,12 +311,17 @@ def plot_series(*series: list[float],
                 ax.set_xlabel('Training step')
         else:
             ax.set_xlabel(xlabel)
-        if names is not None:
+        
+        if (names is not None) and use_legend:
             ax.legend()
+            
         ax.set_ylabel(ylabel)
         ax.set_title(title)
+    
     if show:
         plt.show()
+    else:
+        return artist
 
 
 def plot_metrics(train_loss, val_loss, train_acc, val_acc, rolling_window=500,

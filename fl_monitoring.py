@@ -168,11 +168,11 @@ class ProgressReporter:
 
         if len(prox_losses) > 0:
             # report fedprox loss if we're training with it
-            avg_prox_loss = f'{(sum(prox_losses[-interval:]) / interval):.4f}'
+            avg_prox_loss = f'{(sum(prox_losses[-interval:]) / interval):.6f}'
             prox_str = f'prox loss: {avg_prox_loss}'
-            loss_str = f'{prox_str:^{width//5}} {train_str:^{(2*width)//5}} {val_str:^{(2*width)//3}}'
+            loss_str = f'{prox_str:^{width//3}}{train_str:^{(width)//3}}{val_str:^{(width)//3}}'
         else:
-            loss_str = f'{train_str:^{width//2}} {val_str:^{width//2}}'
+            loss_str = f'{train_str:^{width//2}}{val_str:^{width//2}}'
 
 
         # if learning rates are being supplied, display the learning rate as well:
@@ -295,9 +295,9 @@ class JointProgressReporter:
         self.global_val_accs.append(val_acc)
     
     def plot_curves(self, rolling_window=50, fig=None, show_lrs=True):
-        """plot the loss and accuracy curves for all of the reporters subscribed to
-        this aggregator, breaking them up by epoch and superimposing the global
-        validation metrics on top."""
+        """plot the metric curves for all of the reporters subscribed to this aggregator,
+        as a square of 2x2 subplots across training/validation loss/accuracy,
+        breaking them up by epoch and superimposing the global validation metrics on top."""
         
         #### this is a huge and very messy function, with a lot of untidy hacks and kludges,
         #### because I haven't had time to clean it up and document properly. 
@@ -305,15 +305,6 @@ class JointProgressReporter:
         
         num_clients = len(self.reporters)
         
-        # # collect individual train/val metrics from each client reporter:
-        # client_train_losses = [reporter.metrics['train_losses'] for reporter in self.reporters]
-        # client_val_losses   = [reporter.metrics['val_losses']   for reporter in self.reporters]
-        # client_train_accs   = [reporter.metrics['train_accs']   for reporter in self.reporters]
-        # client_val_accs     = [reporter.metrics['val_accs']     for reporter in self.reporters]
-        # if len(self.reporters[0].metrics['prox_losses']) > 0:
-        #     client_prox_losses = [reporter.metrics['prox_losses']     for reporter in self.reporters]
-        # else:
-        #     client_prox_losses = None
     
         global_epoch_vlosses = self.global_val_losses
         global_epoch_vaccs = self.global_val_accs
@@ -354,6 +345,10 @@ class JointProgressReporter:
         # train on left, validation on right
         # and loss on top, accuracy on bottom:
         (tloss_ax, vloss_ax), (tacc_ax, vacc_ax) = axes
+
+        if len(ref_rep.metrics['prox_losses']) > 0:
+            # plot prox loss on the training loss axis if available
+            prox_ax = tloss_ax.twinx()
     
         client_shades = np.linspace(0.2, 0.5, num_clients)
         train_cmap = colormaps['Oranges']
@@ -388,27 +383,44 @@ class JointProgressReporter:
                 # and get the x locations of those metrics, which are actually determined
                 # by the epoch start indexes of the reporter with the largest dataset:
                 x_steps = np.arange(ref_epoch_start_idxs[e], ref_epoch_start_idxs[e] + client_epoch_len)
+
+
+                # prox loss: (on same axis as train loss)
+                if len(rep.metrics['prox_losses']) > 0:
+                    show_prox = True
+                    use_legend = False
+                    epoch_prox_loss = rep.metrics['prox_losses'][epoch_start_idx : epoch_end_idx]
+                    prox_label = ['Client prox loss'] if use_label else None
+                    # tloss_ax.bar(x_steps, epoch_prox_loss, label=label, 
+                    #              color=colormaps['Reds'](r/num_clients))
+                    prox_artist = plot_series(epoch_prox_loss,
+                        colors=[colormaps['Reds'](r/num_clients)],
+                        linestyles=['-.'],
+                        names=prox_label,
+                        ylabel=f'Prox loss (k={rolling_window})',   
+                        steps=x_steps,
+                        use_legend=False,
+                        ax=prox_ax, rolling_window=rolling_window, show=False)
+                else:
+                    use_legend = True
+                    show_prox = False
                 
                 # train loss:
-                label = ['Client train loss'] if use_label else None
-                plot_series(epoch_tloss,
+                tloss_label = ['Client train loss'] if use_label else None
+                tloss_artist = plot_series(epoch_tloss,
                     colors=[train_colors[r]],
                     linestyles=[':'],
-                    names=label,
+                    names=tloss_label, use_legend=use_legend,
                     ylabel=f'Loss (rolling average, k={rolling_window})',
                     steps=x_steps,
                     ax=tloss_ax, rolling_window=rolling_window, show=False)
                 
-                # prox loss: (on same axis as train loss)
-                if len(rep.metrics['prox_losses']) > 0:
-                    epoch_prox_loss = rep.metrics['prox_losses'][epoch_start_idx : epoch_end_idx]
-                    label = ['Client prox loss'] if use_label else None
-                    plot_series(epoch_prox_loss,
-                        colors=[colormaps['Oranges'](r/num_clients)],
-                        linestyles=['--'],
-                        names=label,
-                        steps=x_steps,
-                        ax=tloss_ax, rolling_window=rolling_window, show=False)
+
+                if use_label and show_prox:
+                    # create a shared legend for prox and training loss:
+                    artists = [tloss_artist[0], prox_artist[0]]
+                    labels = [a.get_label() for a in artists]
+                    
                 
                 # val loss:
                 label = ['Client val loss'] if use_label else None
@@ -469,10 +481,28 @@ class JointProgressReporter:
         vloss_ax.set_title('Validation loss')
         tacc_ax.set_title('Training accuracy')
         vacc_ax.set_title('Validation accuracy')
+
+        if show_prox:
+            # shared legend for training and prox loss:
+            tloss_ax.legend(artists, labels)
+            
+            # if max(epoch_prox_loss) < 1e-2:
+            #     # use scientific notation for prox loss:
+            #     cur_ylim = prox_ax.get_ylim()
+            #     # make sure bottom is at 0:
+            #     # prox_ax.set_ylim([0, cur_ylim[1]])
+            #     ticklabels = prox_ax.get_yticklabels()
+            #     ticktext = [lab.get_text().replace('−', '-') for lab in ticklabels]
+            #     ticktext_sci = [f'{float(txt):.0e}' if float(txt) != 0 else '0'  for txt in ticktext]
+            #     # [lab.set_text(scitext) for lab, scitext in zip(ticklabels, ticktext_sci)]
+            #     # prox_ax.set_yticks(prox_ax.get_yticks())
+            #     prox_ax.set_yticklabels(ticktext_sci)
+            #     # import ipdb; ipdb.set_trace()
+
         
         # display:
         fig.suptitle('Federated learning metrics')
-        plt.tight_layout(h_pad=3, w_pad=3)
+        plt.tight_layout(h_pad=4, w_pad=2)
         plt.show()
     
         # restore existing figure size params:
